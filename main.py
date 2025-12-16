@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 
-from scraper.spider import scraper_service
+from scraper.runner import scraper_service
 
 app = FastAPI(
     title="Bank of Albania Exchange Rate API",
