@@ -184,7 +184,7 @@ async def get_single_rate(currency: str):
         if not result or not result.get("rates"):
             raise HTTPException(
                 status_code=503,
-                detail="Unable to fetch exchange rates"
+                detail=(result or {}).get("error") or "Unable to fetch exchange rates"
             )
 
         rate = result.get("rates", {}).get(currency)

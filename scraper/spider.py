@@ -18,6 +18,8 @@ class ExchangeRateSpider(scrapy.Spider):
         "LOG_ENABLED": False,
         "DOWNLOAD_DELAY": 1,
         "COOKIES_ENABLED": True,
+        # Let non-2xx responses reach parse() so we can report them
+        "HTTPERROR_ALLOW_ALL": True,
     }
 
     def __init__(self, date=None, *args, **kwargs):
@@ -34,9 +36,14 @@ class ExchangeRateSpider(scrapy.Spider):
             "source": BOA_URL
         }
 
+    async def start(self):
+        # Scrapy >= 2.13 entry point; newer versions no longer call start_requests()
+        for request in self.start_requests():
+            yield request
+
     def start_requests(self):
         if not self.date:
-            yield scrapy.Request(BOA_URL, callback=self.parse)
+            yield scrapy.Request(BOA_URL, callback=self.parse, errback=self.on_error)
             return
 
         # Same request the site's "Search by period and currency" form sends
@@ -48,9 +55,17 @@ class ExchangeRateSpider(scrapy.Spider):
             BOA_URL,
             formdata={"ln": "2", "phpVars": search},
             callback=self.parse,
+            errback=self.on_error,
         )
 
+    def on_error(self, failure):
+        self.results["error"] = f"Request to Bank of Albania failed: {failure.getErrorMessage() or failure.type.__name__}"
+
     def parse(self, response):
+        if response.status != 200:
+            self.results["error"] = f"Bank of Albania returned HTTP {response.status}"
+            return
+
         if self.date:
             date_text = response.xpath(
                 "//strong[starts-with(normalize-space(), 'Date ')]/text()"
@@ -86,6 +101,8 @@ class ExchangeRateSpider(scrapy.Spider):
 
         if not self.results["rates"] and "No records found" in response.text:
             self.results["error"] = f"No exchange rates published for {self.date}"
+        elif not self.results["rates"]:
+            self.results["error"] = "Could not find exchange rates table in the Bank of Albania page"
 
         yield self.results
 
