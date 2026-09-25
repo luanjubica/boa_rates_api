@@ -55,6 +55,30 @@ Returns all exchange rates (EUR, USD, GBP).
 }
 ```
 
+### GET /rates/date/{date}
+Returns the official rates (EUR, USD, GBP) published on a specific date.
+
+**Parameters:**
+- `date`: Date in `YYYY-MM-DD` format, e.g. `/rates/date/2025-09-15`
+
+Rates are only published on working days. Weekends and public holidays return `404`; future dates return `400`.
+
+**Response:**
+```json
+{
+  "success": true,
+  "date": "15.09.2025",
+  "rates": {
+    "EUR": 96.91,
+    "USD": 82.52,
+    "GBP": 112.14
+  },
+  "source": "https://www.bankofalbania.org/Markets/Official_exchange_rate/",
+  "fetched_at": "2026-09-25T10:30:00.000000",
+  "error": null
+}
+```
+
 ### GET /rates/{currency}
 Returns exchange rate for a specific currency.
 

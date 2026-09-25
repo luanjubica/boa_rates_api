@@ -8,13 +8,17 @@ import json
 import sys
 import os
 from pathlib import Path
+from typing import Optional
 
 BOA_URL = "https://www.bankofalbania.org/Markets/Official_exchange_rate/"
 
 
-def run_spider() -> dict:
+def run_spider(date: Optional[str] = None) -> dict:
     """
     Run the Scrapy spider in a subprocess and return the results.
+
+    Args:
+        date: Optional date in DD.MM.YYYY format for historical rates.
 
     Returns:
         dict: Exchange rate data with keys: date, rates, source
@@ -24,8 +28,12 @@ def run_spider() -> dict:
 
     try:
         # Run the spider as a subprocess
+        args = [sys.executable, str(spider_path)]
+        if date:
+            args.append(date)
+
         result = subprocess.run(
-            [sys.executable, str(spider_path)],
+            args,
             capture_output=True,
             text=True,
             timeout=60,
@@ -73,14 +81,17 @@ def run_spider() -> dict:
 class ScraperService:
     """Service class for fetching exchange rates."""
 
-    def get_exchange_rates(self) -> dict:
+    def get_exchange_rates(self, date: Optional[str] = None) -> dict:
         """
         Fetch exchange rates from Bank of Albania.
+
+        Args:
+            date: Optional date in DD.MM.YYYY format. Defaults to today's rates.
 
         Returns:
             dict: Exchange rate data
         """
-        return run_spider()
+        return run_spider(date)
 
 
 # Singleton instance

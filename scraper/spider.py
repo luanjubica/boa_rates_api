@@ -1,5 +1,6 @@
 import scrapy
 import json
+import re
 import sys
 
 
@@ -9,7 +10,6 @@ TARGET_CURRENCIES = ["EUR", "USD", "GBP"]
 
 class ExchangeRateSpider(scrapy.Spider):
     name = "boa_exchange_rates"
-    start_urls = [BOA_URL]
 
     custom_settings = {
         "USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -20,76 +20,72 @@ class ExchangeRateSpider(scrapy.Spider):
         "COOKIES_ENABLED": True,
     }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, date=None, *args, **kwargs):
+        """
+        Args:
+            date: Optional date in DD.MM.YYYY format. When given, the spider
+                  queries the historical search instead of today's rates.
+        """
         super().__init__(*args, **kwargs)
+        self.date = date
         self.results = {
             "date": None,
             "rates": {},
             "source": BOA_URL
         }
 
-    def parse(self, response):
-        import re
+    def start_requests(self):
+        if not self.date:
+            yield scrapy.Request(BOA_URL, callback=self.parse)
+            return
 
-        # Try to find the date of the exchange rates
-        date_text = response.css("div.rates-date::text, span.date::text, .exchange-date::text").get()
+        # Same request the site's "Search by period and currency" form sends
+        search = (
+            f"event=kursi_kembimit.search_this(startDate={self.date};"
+            f"endDate={self.date};pubcat=99;menyra_shfaqjes=T)"
+        )
+        yield scrapy.FormRequest(
+            BOA_URL,
+            formdata={"ln": "2", "phpVars": search},
+            callback=self.parse,
+        )
+
+    def parse(self, response):
+        if self.date:
+            date_text = response.xpath(
+                "//strong[starts-with(normalize-space(), 'Date ')]/text()"
+            ).re_first(r"(\d{2}\.\d{2}\.\d{4})")
+        else:
+            date_text = response.xpath(
+                "//span[contains(., 'Last update')]/following-sibling::span[1]/b[1]/text()"
+            ).get()
         if not date_text:
-            date_text = response.xpath("//text()[contains(., 'Date') or contains(., 'Datë')]/following::text()[1]").get()
-        if not date_text:
-            date_text = response.xpath("//table//th[contains(text(), 'Date') or contains(text(), 'Datë')]/following-sibling::th/text()").get()
-        if not date_text:
-            page_text = response.text
-            date_match = re.search(r'(\d{1,2}[./]\d{1,2}[./]\d{4})', page_text)
+            date_match = re.search(r'(\d{1,2}[./]\d{1,2}[./]\d{4})', response.text)
             if date_match:
                 date_text = date_match.group(1)
 
-        self.results["date"] = date_text.strip() if date_text else "Unknown"
+        self.results["date"] = date_text.strip() if date_text else None
 
-        # Parse exchange rates table
-        rows = response.css("table tr, table.rates tr")
+        # The official rates are in the first "Main Currency" table; later
+        # tables (e.g. bid/ask) also list USD/EUR and must be ignored.
+        table = response.xpath("(//table[.//th[contains(., 'Main Currency')]])[1]")
+        rows = table.xpath(".//tr") if table else response.css("table tr")
 
         for row in rows:
-            cells = row.css("td::text, td *::text").getall()
-            cells = [c.strip() for c in cells if c.strip()]
-
-            if not cells:
-                continue
+            cells = [c.strip() for c in row.xpath("./td//text()").getall() if c.strip()]
 
             for currency in TARGET_CURRENCIES:
-                if currency in cells:
-                    for cell in cells:
-                        try:
-                            rate_str = cell.replace(",", ".")
-                            rate = float(rate_str)
-                            if rate > 0:
-                                self.results["rates"][currency] = rate
-                                break
-                        except ValueError:
-                            continue
-
-        # Alternative parsing with xpath
-        if not self.results["rates"]:
-            for currency in TARGET_CURRENCIES:
-                rate_xpath = f"//tr[contains(., '{currency}')]//td[last()]/text()"
-                rate = response.xpath(rate_xpath).get()
-                if rate:
+                if currency in self.results["rates"] or currency not in cells:
+                    continue
+                idx = cells.index(currency)
+                if idx + 1 < len(cells):
                     try:
-                        self.results["rates"][currency] = float(rate.strip().replace(",", "."))
+                        self.results["rates"][currency] = float(cells[idx + 1].replace(",", "."))
                     except ValueError:
                         pass
 
-        # Regex fallback
-        if not self.results["rates"]:
-            page_text = response.text
-            for currency in TARGET_CURRENCIES:
-                pattern = rf'{currency}[^\d]*(\d+[.,]\d+)'
-                match = re.search(pattern, page_text)
-                if match:
-                    rate_str = match.group(1).replace(",", ".")
-                    try:
-                        self.results["rates"][currency] = float(rate_str)
-                    except ValueError:
-                        pass
+        if not self.results["rates"] and "No records found" in response.text:
+            self.results["error"] = f"No exchange rates published for {self.date}"
 
         yield self.results
 
@@ -104,5 +100,5 @@ if __name__ == "__main__":
     process = CrawlerProcess(settings={
         "LOG_ENABLED": False,
     })
-    process.crawl(ExchangeRateSpider)
+    process.crawl(ExchangeRateSpider, date=sys.argv[1] if len(sys.argv) > 1 else None)
     process.start()

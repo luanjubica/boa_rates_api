@@ -8,7 +8,7 @@ for daily exchange rates (EUR, USD, GBP).
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Optional
-from datetime import datetime
+from datetime import date, datetime
 
 from scraper.runner import scraper_service
 
@@ -42,6 +42,7 @@ async def root():
         "version": "1.0.0",
         "endpoints": {
             "/rates": "Get current exchange rates for EUR, USD, GBP",
+            "/rates/date/{date}": "Get exchange rates for a specific date (YYYY-MM-DD)",
             "/health": "Health check endpoint"
         }
     }
@@ -87,6 +88,66 @@ async def get_exchange_rates():
             source=result.get("source", "https://www.bankofalbania.org/Markets/Official_exchange_rate/"),
             fetched_at=datetime.utcnow().isoformat(),
             error=result.get("error")
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error fetching exchange rates: {str(e)}"
+        )
+
+
+@app.get("/rates/date/{rate_date}", response_model=ExchangeRateResponse)
+async def get_exchange_rates_for_date(rate_date: date):
+    """
+    Fetch the official exchange rates published on a specific date.
+
+    Args:
+        rate_date: Date in YYYY-MM-DD format (e.g. 2025-09-15)
+
+    Rates are only published on working days; weekends and public
+    holidays return 404.
+    """
+    if rate_date > date.today():
+        raise HTTPException(
+            status_code=400,
+            detail="Date cannot be in the future"
+        )
+
+    try:
+        result = scraper_service.get_exchange_rates(rate_date.strftime("%d.%m.%Y"))
+
+        if not result:
+            raise HTTPException(
+                status_code=503,
+                detail="Unable to fetch exchange rates"
+            )
+
+        if not result.get("rates"):
+            if result.get("error", "").startswith("No exchange rates published"):
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No exchange rates published for {rate_date.isoformat()} (weekend or holiday?)"
+                )
+            raise HTTPException(
+                status_code=503,
+                detail=result.get("error") or "Unable to fetch exchange rates"
+            )
+
+        rates = ExchangeRates(
+            EUR=result["rates"].get("EUR"),
+            USD=result["rates"].get("USD"),
+            GBP=result["rates"].get("GBP")
+        )
+
+        return ExchangeRateResponse(
+            success=True,
+            date=result.get("date"),
+            rates=rates,
+            source=result.get("source", "https://www.bankofalbania.org/Markets/Official_exchange_rate/"),
+            fetched_at=datetime.utcnow().isoformat()
         )
 
     except HTTPException:
